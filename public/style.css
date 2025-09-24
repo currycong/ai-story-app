@@ -1,0 +1,340 @@
+/* 全局样式 */
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    margin: 0;
+    background-color: #f0f8ff;
+    color: #333;
+}
+
+header {
+    text-align: center;
+    padding: 20px;
+    background-color: #ffffff;
+    border-bottom: 2px solid #bde0fe;
+}
+
+header h1 {
+    color: #ff8c00;
+    font-size: 2.5em;
+    margin: 0;
+}
+
+/* 图片画廊 */
+#gallery {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+    padding: 15px;
+}
+
+.gallery-item {
+    cursor: pointer;
+    overflow: hidden;
+    border-radius: 15px;
+    box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    position: relative;
+    background-color: #eee;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+}
+
+.gallery-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.gallery-item:hover {
+    transform: scale(1.05);
+    box-shadow: 0 12px 24px rgba(0,0,0,0.2);
+}
+
+/* 缓存指示器 */
+.cache-indicator {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 5px 10px;
+    border-radius: 15px;
+    font-size: 12px;
+    z-index: 10;
+}
+
+/* 加载动画 */
+.gallery-item .spinner {
+    border: 4px solid #f3f3f3;
+    border-top: 4px solid #ff8c00;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* 全屏故事播放器 Modal */
+#story-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.85);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.5s ease, visibility 0.5s ease;
+}
+
+#story-modal:not(.hidden) {
+    opacity: 1;
+    visibility: visible;
+}
+
+#story-player {
+    width: 100%;
+    height: 100%;
+    background-size: cover;
+    background-position: center;
+}
+/* 在全屏容器 #story-player 上用伪元素做暗角和移动高光 */
+#story-player {
+  position: relative;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+}
+
+/* 暗角 */
+#story-player::before {
+  content: "";
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center,
+              rgba(0,0,0,0) 50%, rgba(0,0,0,0.28) 100%);
+  z-index: 1;
+}
+
+/* 移动高光（缓慢扫光，像镜头进光变化） */
+#story-player::after {
+  content: "";
+  position: absolute; inset: -20%;
+  pointer-events: none;
+  background: linear-gradient(120deg,
+              rgba(255,255,255,0.06) 0%,
+              rgba(255,255,255,0.12) 30%,
+              rgba(255,255,255,0.00) 60%);
+  mix-blend-mode: screen;
+  animation: lightSweep 12s ease-in-out infinite alternate;
+  z-index: 1;
+}
+
+@keyframes lightSweep {
+  0%   { transform: translate(-10%, -5%) rotate(5deg); opacity: .5; }
+  100% { transform: translate(10%, 5%) rotate(-2deg); opacity: .35; }
+}
+
+/* 可选：极轻颗粒，让画面不那么“数字味” */
+.grain {
+  position: absolute; inset: -50%;
+  background-image: url('data:image/svg+xml;utf8,\
+<svg xmlns="http://www.w3.org/2000/svg" width=\"140\" height=\"140\">\
+<filter id=\"n\"><feTurbulence baseFrequency=\"0.8\" numOctaves=\"2\"/></filter>\
+<rect width=\"100%\" height=\"100%\" filter=\"url(#n)\" opacity=\"0.04\"/></svg>');
+  background-size: 140px 140px;
+  animation: grain 1.8s steps(2) infinite;
+  mix-blend-mode: multiply;
+  z-index: 1;
+}
+@keyframes grain { from { transform: translate(0,0); } to { transform: translate(-10%, -6%); } }
+
+
+/* 图片"动起来"的动画效果 */
+/* 更像视频的分段镜头运动：放大+平移+轻微旋转+暂停片刻 */
+.animate-ken-burns {
+  animation: kb_cinematic 14s ease-in-out forwards;
+  will-change: transform;
+  transform-origin: 50% 50%;
+}
+
+@keyframes kb_cinematic {
+  /* 起始：停一点点，像镜头先对焦 */
+  0%   { transform: scale(1.00) rotate(0deg) translate(0, 0); }
+  10%  { transform: scale(1.02) rotate(0.1deg) translate(0, 0); }
+
+  /* 缓慢推近并右上平移 */
+  40%  { transform: scale(1.07) rotate(0.5deg) translate(-1.5%, -1%); }
+
+  /* 中段稍作停顿（观众有“看清内容”的感觉） */
+  55%  { transform: scale(1.08) rotate(0.6deg) translate(-1.6%, -1.2%); }
+
+  /* 再次推进并反向微移，模拟手持微修位 */
+  85%  { transform: scale(1.12) rotate(0.2deg) translate(1%, 0.8%); }
+
+  /* 收尾定格 */
+  100% { transform: scale(1.12) rotate(0.2deg) translate(1%, 0.8%); }
+}
+
+/* 叠加在 .animate-ken-burns 上使用： */
+.animate-handheld {
+  animation: handheld 2.4s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes handheld {
+  0%   { transform: translate(0, 0) rotate(0deg); }
+  25%  { transform: translate(0.25%, -0.15%) rotate(0.05deg); }
+  50%  { transform: translate(-0.2%, 0.2%) rotate(-0.05deg); }
+  75%  { transform: translate(0.15%, 0.1%) rotate(0.04deg); }
+  100% { transform: translate(0, 0) rotate(0deg); }
+}
+
+
+/* ===== 字幕容器 - 屏幕正中间 ===== */
+#subtitle-container {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 90%;
+    max-width: 800px;
+    padding: 30px;
+    text-align: center;
+    pointer-events: none;
+    z-index: 100;
+    background: radial-gradient(
+        ellipse at center,
+        rgba(0, 0, 0, 0.7) 0%,
+        rgba(0, 0, 0, 0.4) 50%,
+        transparent 100%
+    );
+    border-radius: 20px;
+}
+
+/* ===== 字幕行 ===== */
+.subtitle-line {
+    display: block;
+    margin: 15px 0;
+    font-size: 2.5em;
+    line-height: 1.5;
+    transition: all 0.3s ease;
+    opacity: 0.6;
+}
+
+/* 当前播放的行 */
+.subtitle-line.active {
+    opacity: 1;
+    transform: scale(1.08);
+}
+
+/* ===== 单词样式（基础） ===== */
+.subtitle-word {
+    display: inline-block;
+    transition: all 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+    color: #ffffff;
+    margin: 0 4px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    font-weight: 500;
+    text-shadow:
+        3px 3px 8px rgba(0,0,0,1),
+        -3px -3px 8px rgba(0,0,0,1),
+        3px -3px 8px rgba(0,0,0,1),
+        -3px 3px 8px rgba(0,0,0,1);
+}
+
+/* ===== 高亮：去除黄色阴影与背景，仅保留放大和加粗 ===== */
+.subtitle-word.highlight {
+    background: transparent !important;
+    filter: none !important;
+    text-shadow: inherit !important;
+
+    transform: scale(1.5) translateY(-6px) !important;
+    font-weight: 700 !important;
+    color: #ffd700 !important; /* 放大时变成黄色 */
+}
+
+/* 已读过的单词（轻微强调） */
+.subtitle-word.sung {
+    color: #ffffff !important; /* 恢复白色 */
+    opacity: 0.9;
+    transform: scale(1.05);
+}
+
+/* 淡入动画 */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 480px) and (orientation: portrait) {
+    #subtitle-container { top: 50%; padding: 20px; width: 95%; }
+    .subtitle-line { font-size: 1.8em; margin: 10px 0; }
+    .subtitle-word.highlight { transform: scale(1.4) translateY(-4px) !important; }
+}
+
+@media (min-width: 481px) and (max-width: 768px) {
+    .subtitle-line { font-size: 2.2em; }
+}
+
+@media (min-width: 1024px) {
+    #subtitle-container { max-width: 900px; }
+    .subtitle-line { font-size: 3em; margin: 20px 0; }
+    .subtitle-word.highlight { transform: scale(1.8) translateY(-8px) !important; }
+}
+
+/* =====（以下为保留的全屏容器通用样式，未使用也无妨）===== */
+#fullscreen-player { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #000; z-index: 9999; overflow: hidden; }
+.story-container { width: 100%; height: 100%; transition: transform 0.3s ease; }
+.story-item { width: 100vw; height: 100vh; position: relative; overflow: hidden; }
+.story-background { width: 100%; height: 100%; background-size: cover; background-position: center; background-repeat: no-repeat; }
+.swipe-hint { position: fixed; right: 20px; top: 50%; transform: translateY(-50%); color: white; opacity: 0.6; font-size: 14px; display: flex; flex-direction: column; gap: 20px; z-index: 10001; }
+.swipe-up, .swipe-down { writing-mode: vertical-lr; text-orientation: mixed; }
+#close-fullscreen { position: fixed; top: 20px; right: 20px; background: rgba(255, 255, 255, 0.2); color: white; border: 2px solid white; width: 40px; height: 40px; border-radius: 50%; font-size: 20px; cursor: pointer; z-index: 10001; backdrop-filter: blur(10px); }
+
+/* 字幕容器 - 屏幕中央 */
+.story-item .subtitle-container {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 90%; max-width: 600px; text-align: center; z-index: 100;
+}
+
+/* 字幕行样式 */
+.subtitle-line { margin: 10px 0; font-size: 2.2em; line-height: 1.4; color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.9), -2px -2px 4px rgba(0,0,0,0.9); }
+
+/* 工具隐藏类 */
+.hidden { display: none; }
+
+/* 全屏关闭按钮 */
+#story-modal .close-btn {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(0,0,0,0.6);
+  border: none;
+  color: #fff;
+  font-size: 24px;
+  padding: 8px 12px;
+  border-radius: 50%;
+  cursor: pointer;
+  z-index: 9999;
+  transition: background 0.2s ease;
+}
+
+#story-modal .close-btn:hover {
+  background: rgba(0,0,0,0.85);
+}

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI童话故事屋</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>AI童话故事屋</h1>
+        <p>所有内容都由AI实时生成！</p>
+    </header>
+
+    <main id="gallery">
+        <!-- 故事缩略图会动态生成在这里 -->
+    </main>
+    
+    <div id="loader" class="hidden">正在请求魔法...</div>
+
+    <!-- 全屏故事播放器 -->
+    <div id="story-modal" class="hidden">
+        <div id="story-player">
+            <div class="grain"></div>
+        </div>
+        <div id="subtitle-container"></div>
+        <button id="close-modal" class="close-btn">✕</button>
+        <div id="story-loader" class="hidden">正在生成语音...</div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
