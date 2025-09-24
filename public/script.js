@@ -21,6 +21,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentPlayToken = 0;             // bump each time we start a new story
   let speechAbortController = null;     // cancel pending TTS fetch when switching fast
 
+  // 🔊 手势解锁 & 回放控制
+  let audioUnlocked = false;            // 是否已被用户手势解锁
+  let pendingAudioToPlay = null;        // 若首次播放被拦截，记录待重播的 audio
+
   // Home feed control
   let lastBatchElements = [];
   const usedPrompts = new Set();
@@ -31,6 +35,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // ===== Initial load (allow cache) =====
   loadNewStories({ insert: 'append', forceRefresh: false });
+
+  // 🔊 在任意用户手势时尝试解锁音频，并重试播放一次
+  function tryUnlockAudio() {
+    if (!audioUnlocked) {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+          if (!window.__appAC__) window.__appAC__ = new AC();
+          if (window.__appAC__.state === 'suspended') {
+            window.__appAC__.resume().catch(() => {});
+          }
+        }
+      } catch (_) {}
+      // 播一个极短静音，触发媒体激活（即使失败也无副作用）
+      try {
+        const silent = new Audio('data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA');
+        silent.muted = true;
+        silent.playsInline = true;
+        silent.play().catch(() => {});
+      } catch (_) {}
+      audioUnlocked = true;
+    }
+
+    // 若先前因策略被拦截，手势发生后重试一次
+    if (pendingAudioToPlay) {
+      pendingAudioToPlay.muted = false;
+      pendingAudioToPlay.play().catch(() => {});
+      pendingAudioToPlay = null;
+    }
+  }
+  document.addEventListener('touchstart', tryUnlockAudio, { passive: true });
+  document.addEventListener('click', tryUnlockAudio);
 
   /**
    * Fetch a fresh batch of stories (target 4), render to gallery.
@@ -152,6 +188,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (idx === -1) return;
     currentStoryIndex = idx;
     modal.classList.remove('hidden');
+
+    // 🔊 进入全屏时先尝试解锁，避免首次播放被策略拦截
+    tryUnlockAudio();
+
     await playCurrentStory();
   }
 
@@ -207,7 +247,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const speechData = await speechResponse.json();
       storyLoader.classList.add('hidden');
       storyPlayer.classList.add('animate-ken-burns', 'animate-handheld');
-
 
       // Now show subtitles since audio is ready
       subtitleContainer.style.display = 'block';
@@ -304,6 +343,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const audioUrl = URL.createObjectURL(audioBlob);
     currentAudioUrl = audioUrl;
     currentAudio = new Audio(audioUrl);
+
+    // 🔊 iOS 必需：内联播放 + 不静音
+    currentAudio.playsInline = true;
+    currentAudio.autoplay = true;
+    currentAudio.muted = false;
 
     subtitleContainer.innerHTML = '';
 
@@ -409,7 +453,11 @@ document.addEventListener('DOMContentLoaded', () => {
     // Show subtitles once audio is ready to play
     subtitleContainer.style.display = 'block';
 
-    currentAudio.play().catch(err => console.warn('Audio play blocked until user gesture:', err));
+    // 🔊 尝试播放；若被浏览器策略拦截，把当前 audio 记录为待重播
+    currentAudio.play().catch(err => {
+      console.warn('Audio play blocked until user gesture:', err);
+      pendingAudioToPlay = currentAudio;
+    });
 
     let currentLineIdx = -1;
 
@@ -465,144 +513,3 @@ document.addEventListener('DOMContentLoaded', () => {
     } else {
       currentAudio.addEventListener('loadedmetadata', () => {
         if (token !== currentPlayToken) return; // in case we switched before metadata
-        const duration = currentAudio.duration * 1000;
-        const timePerWord = duration / wordsData.length;
-        wordsData.forEach((_, idx) => {
-          const timeoutId = setTimeout(() => updateWordHighlight(idx), idx * timePerWord);
-          subtitleTimeouts.push(timeoutId);
-        });
-      });
-    }
-
-    currentAudio.onended = () => {
-      if (token !== currentPlayToken) return;
-      storyPlayer.classList.remove('animate-ken-burns');
-      wordElements.forEach(el => { if (el) el.classList.remove('highlight', 'current-word', 'sung'); });
-      lineElements.forEach(el => { if (el) el.classList.remove('active'); });
-      subtitleContainer.style.display = 'none';
-      subtitleTimeouts = [];
-    };
-  }
-
-  // ===== Stop current audio and clear timers/listeners =====
-  function stopCurrentAudio() {
-    // Cancel TTS fetch if in-flight
-    if (speechAbortController) {
-      try { speechAbortController.abort(); } catch {}
-      speechAbortController = null;
-    }
-
-    // Stop audio
-    if (currentAudio) {
-      try {
-        currentAudio.pause();
-        // Detach event handlers
-        currentAudio.onended = null;
-        currentAudio.src = '';
-        currentAudio.load?.();
-      } catch {}
-      currentAudio = null;
-    }
-
-    // Revoke blob URL
-    if (currentAudioUrl) {
-      try { URL.revokeObjectURL(currentAudioUrl); } catch {}
-      currentAudioUrl = null;
-    }
-
-    // Clear subtitle timers
-    if (subtitleTimeouts.length > 0) {
-      subtitleTimeouts.forEach(id => clearTimeout(id));
-      subtitleTimeouts = [];
-    }
-
-    // Reset subtitle UI
-    if (subtitleContainer) {
-      const allWords = subtitleContainer.querySelectorAll('.subtitle-word');
-      allWords.forEach(el => el.classList.remove('highlight', 'sung'));
-      const allLines = subtitleContainer.querySelectorAll('.subtitle-line');
-      allLines.forEach(el => el.classList.remove('active'));
-      subtitleContainer.style.display = 'none';
-    }
-  }
-
-  // ===== Close fullscreen =====
-  function closeStory() {
-    modal.classList.add('hidden');
-    storyPlayer.classList.remove('animate-ken-burns');
-    stopCurrentAudio();
-
-    // Pin the latest batch to top on home
-    if (lastBatchElements && lastBatchElements.length > 0) {
-      for (let i = lastBatchElements.length - 1; i >= 0; i--) {
-        const el = lastBatchElements[i];
-        if (el && el.parentElement === gallery) gallery.prepend(el);
-      }
-    }
-  }
-  if (closeModalBtn) closeModalBtn.addEventListener('click', closeStory);
-
-  // ===== Gestures & Wheel (capture inside modal) =====
-  let touchStartY = 0;
-  modal.addEventListener('touchstart', (e) => {
-    touchStartY = e.changedTouches[0].screenY;
-  }, { passive: true });
-
-  modal.addEventListener('touchend', (e) => {
-    const dy = touchStartY - e.changedTouches[0].screenY;
-    if (Math.abs(dy) > 50) (dy > 0 ? nextStory() : previousStory());
-  }, { passive: true });
-
-  const wheelHandler = (e) => {
-    if (modal.classList.contains('hidden')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (navLock) return;
-    navLock = true;
-    setTimeout(() => (navLock = false), NAV_THROTTLE_MS);
-
-    if (e.deltaY > 0) nextStory();
-    else previousStory();
-  };
-  modal.addEventListener('wheel', wheelHandler, { passive: false });
-  window.addEventListener('wheel', wheelHandler, { passive: false });
-
-  // ===== Preload next batch at every 4th item (append), then continue playing =====
-  async function nextStory() {
-    const atBatchTail = (currentStoryIndex % 4 === 3);
-    if (atBatchTail && !isLoading) {
-      await loadNewStories({ insert: 'append', forceRefresh: true });
-    }
-
-    // advance index; if we run past end (e.g., some new items failed image), wrap to first playable
-    if (currentStoryIndex < storiesData.length - 1) {
-      currentStoryIndex++;
-    } else {
-      const firstPlayableIndex = storiesData.findIndex(x => x.imageUrl);
-      if (firstPlayableIndex >= 0) currentStoryIndex = firstPlayableIndex;
-      else { closeStory(); return; }
-    }
-    await playCurrentStory();
-  }
-
-  function previousStory() {
-    if (currentStoryIndex > 0) {
-      currentStoryIndex--;
-      playCurrentStory();
-    }
-  }
-
-  // Keyboard navigation
-  document.addEventListener('keydown', (e) => {
-    if (modal.classList.contains('hidden')) return;
-    switch (e.key) {
-      case 'Escape': return closeStory();
-      case 'ArrowDown':
-      case 'ArrowRight':
-        e.preventDefault(); return nextStory();
-      case 'ArrowUp':
-      case 'ArrowLeft':
-        e.preventDefault(); return previousStory();
-    }
-  });
-});
