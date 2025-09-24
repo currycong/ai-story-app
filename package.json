@@ -1,0 +1,31 @@
+{
+  "name": "ai-story-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@google-cloud/text-to-speech": "^6.3.0",
+    "@google/generative-ai": "^0.24.1",
+    "axios": "^1.12.0",
+    "dotenv": "^17.2.2",
+    "express": "^5.1.0",
+    "node-fetch": "^3.3.2",
+    "openai": "^5.20.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/currycong/ai-story-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/currycong/ai-story-app/issues"
+  },
+  "homepage": "https://github.com/currycong/ai-story-app#readme"
+}
