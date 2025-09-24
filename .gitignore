@@ -1,9 +1,10 @@
 # 缓存文件
-cache/
+# cache/ 
 
 # 环境变量
 .env
-*.json
+google-credentials.json
+
 
 # Node modules
 node_modules/
