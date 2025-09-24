@@ -1,6 +1,6 @@
-// script.js (full, with image-fail fallback -> jump to first story and skip TTS)
 /* eslint-disable no-console */
 document.addEventListener('DOMContentLoaded', () => {
+  // ---- DOM refs (全部容错) ----
   const gallery = document.getElementById('gallery');
   const loader = document.getElementById('loader');
   const modal = document.getElementById('story-modal');
@@ -9,114 +9,95 @@ document.addEventListener('DOMContentLoaded', () => {
   const storyLoader = document.getElementById('story-loader');
   const closeModalBtn = document.getElementById('close-modal');
 
-  // ===== State =====
+  // 任意一个关键节点缺失就直接退出，避免报错卡首页
+  if (!gallery || !storyPlayer) {
+    console.error('Required DOM nodes missing. Aborting init.');
+    return;
+  }
+
+  // ---- State ----
   let isLoading = false;
   let storiesData = [];                 // [{ id, prompt, story, imageUrl, element }]
   let currentStoryIndex = 0;
 
-  // Audio / subtitle control
+  // 音频/字幕
   let currentAudio = null;
   let currentAudioUrl = null;           // for URL.revokeObjectURL
   let subtitleTimeouts = [];
   let currentPlayToken = 0;             // bump each time we start a new story
   let speechAbortController = null;     // cancel pending TTS fetch when switching fast
 
-  // 🔊 手势解锁 & 回放控制
-  let audioUnlocked = false;            // 是否已被用户手势解锁
-  let pendingAudioToPlay = null;        // 若首次播放被拦截，记录待重播的 audio
+  // 音频解锁（无覆盖层方案）
+  let audioUnlocked = false;
+  function tryUnlockAudio() {
+    if (audioUnlocked) return;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) {
+        if (!window.__appAC__) window.__appAC__ = new AC();
+        if (window.__appAC__.state === 'suspended') {
+          window.__appAC__.resume();
+        }
+      }
+    } catch (_) {}
+    // 播一个极短静音以触发激活（不依赖任何DOM）
+    try {
+      const a = new Audio();
+      a.muted = true;
+      a.playsInline = true;
+      a.src =
+        'data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA'; // 1ms 静音片段足够触发
+      a.play().catch(() => {});
+    } catch (_) {}
+    audioUnlocked = true;
+  }
+
+  // 任何用户手势都尝试解锁（不弹UI）
+  document.addEventListener('touchstart', tryUnlockAudio, { passive: true });
+  document.addEventListener('click', tryUnlockAudio, { passive: true });
+
+  // 首页手势也解锁，保证首个进入全屏就有声
+  gallery.addEventListener?.('touchstart', tryUnlockAudio, { passive: true });
 
   // Home feed control
   let lastBatchElements = [];
   const usedPrompts = new Set();
 
-  // Navigation throttle (avoid rapid multi-trigger on wheel/gesture)
+  // 导航节流
   let navLock = false;
   const NAV_THROTTLE_MS = 250;
 
-  // ===== Initial load (allow cache) =====
+  // ---- 初次加载 ----
   loadNewStories({ insert: 'append', forceRefresh: false });
 
-  // 🔊 在任意用户手势时尝试解锁音频，并重试播放一次
-  function tryUnlockAudio() {
-    if (!audioUnlocked) {
-      try {
-        const AC = window.AudioContext || window.webkitAudioContext;
-        if (AC) {
-          if (!window.__appAC__) window.__appAC__ = new AC();
-          if (window.__appAC__.state === 'suspended') {
-            window.__appAC__.resume().catch(() => {});
-          }
-        }
-      } catch (_) {}
-      // 播一个极短静音，触发媒体激活（即使失败也无副作用）
-      try {
-        const silent = new Audio('data:audio/mp3;base64,//uQZAAAAAAAAAAAAAAAAAAAA');
-        silent.muted = true;
-        silent.playsInline = true;
-        silent.play().catch(() => {});
-      } catch (_) {}
-      audioUnlocked = true;
-    }
-
-    // 若先前因策略被拦截，手势发生后重试一次
-    if (pendingAudioToPlay) {
-      pendingAudioToPlay.muted = false;
-      pendingAudioToPlay.play().catch(() => {});
-      pendingAudioToPlay = null;
-    }
+  // 统一显示/隐藏加载
+  function setLoading(v) {
+    isLoading = v;
+    if (!loader) return;
+    loader.classList.toggle('hidden', !v);
   }
-  document.addEventListener('touchstart', tryUnlockAudio, { passive: true });
-  document.addEventListener('click', tryUnlockAudio);
 
   /**
-   * Fetch a fresh batch of stories (target 4), render to gallery.
-   * insert: 'append' | 'prepend'
-   * forceRefresh: whether to call backend with ?refresh=true
+   * 拉取一批新故事并渲染，保证满4张（失败/去重会继续补齐）
    */
   async function loadNewStories({ insert = 'append', forceRefresh = false } = {}) {
     if (isLoading) return;
-    isLoading = true;
-    loader.classList.remove('hidden');
+    setLoading(true);
 
-    try {
-      const TARGET = 4;
-      const newStories = [];
-      const createdItems = [];
+    const TARGET = 4;
+    const createdItems = [];
+    const batch = [];
+    const maxRounds = 5;
 
-      let tries = 0;
-      while (newStories.length < TARGET && tries < 3) {
-        tries++;
-        const url = (forceRefresh || tries > 1)
-          ? '/api/get-story-ideas?refresh=true'
-          : '/api/get-story-ideas';
-        const resp = await fetch(url);
-        const data = await resp.json();
-        const candidates = Array.isArray(data.stories) ? data.stories : [];
-        const fresh = candidates.filter(s => s && s.prompt && !usedPrompts.has(s.prompt));
-        for (const s of fresh) {
-          newStories.push(s);
-          if (newStories.length === TARGET) break;
-        }
-      }
-
-      if (newStories.length === 0) {
-        const fb = await fetch('/api/get-story-ideas?refresh=true');
-        const fbData = await fb.json();
-        const fbFresh = (fbData.stories || []).filter(s => s && s.prompt && !usedPrompts.has(s.prompt));
-        newStories.push(...fbFresh.slice(0, TARGET));
-      }
-      if (newStories.length === 0) throw new Error('No fresh stories available from backend.');
-
-      // Build placeholders in DOM first
-      const placeholders = newStories.map((storyIdea) => {
+    const renderStories = async (storyIdeas) => {
+      const placeholders = storyIdeas.map((idea) => {
         const item = document.createElement('div');
         item.className = 'gallery-item';
         item.innerHTML = '<div class="spinner"></div>';
         if (insert === 'prepend') gallery.prepend(item); else gallery.appendChild(item);
-        return { ...storyIdea, element: item, id: Date.now() + Math.random() };
+        return { ...idea, element: item, id: Date.now() + Math.random() };
       });
 
-      // Generate images; if any image fails -> remove its DOM and DO NOT add it to storiesData
       await Promise.all(placeholders.map(async (s) => {
         try {
           const r = await fetch('/api/generate-image', {
@@ -125,13 +106,7 @@ document.addEventListener('DOMContentLoaded', () => {
             body: JSON.stringify({ prompt: s.prompt })
           });
           const imgData = await r.json();
-
-          if (!imgData || !imgData.base64) {
-            // image generation failed (e.g., 429 / insufficient balance)
-            s.failed = true;
-            if (s.element && s.element.parentElement) s.element.parentElement.removeChild(s.element);
-            return;
-          }
+          if (!imgData || !imgData.base64) throw new Error('image-failed');
 
           const img = document.createElement('img');
           img.src = `data:image/png;base64,${imgData.base64}`;
@@ -151,117 +126,120 @@ document.addEventListener('DOMContentLoaded', () => {
           s.element.dataset.id = s.id;
           s.element.addEventListener('click', () => openStory(s.id));
           createdItems.push(s.element);
-        } catch (err) {
-          // network/API error -> treat as failed image
-          console.error('Image generation failed for prompt:', s.prompt, err);
-          s.failed = true;
+        } catch (e) {
+          // 失败：移除占位，不计入 batch
           if (s.element && s.element.parentElement) s.element.parentElement.removeChild(s.element);
+          s.failed = true;
         }
       }));
 
-      // Keep only successful stories (with imageUrl)
-      const successStories = placeholders.filter(s => !s.failed && s.imageUrl);
+      return placeholders.filter(s => !s.failed && s.imageUrl);
+    };
 
-      // Record used prompts only for success ones
-      successStories.forEach(s => usedPrompts.add(s.prompt));
+    try {
+      let round = 0;
+      while (batch.length < TARGET && round < maxRounds) {
+        round++;
+        const url = (forceRefresh || round > 1)
+          ? '/api/get-story-ideas?refresh=true&lang=en'
+          : '/api/get-story-ideas?lang=en';
 
-      // Update global store
-      if (insert === 'prepend') {
-        storiesData = [...successStories, ...storiesData];
-      } else {
-        storiesData.push(...successStories);
+        const resp = await fetch(url);
+        const data = await resp.json();
+        const candidates = Array.isArray(data.stories) ? data.stories : [];
+
+        const freshIdeas = candidates.filter(s => s && s.prompt && !usedPrompts.has(s.prompt));
+        const success = await renderStories(freshIdeas);
+
+        success.forEach(s => {
+          if (batch.length < TARGET) {
+            batch.push(s);
+            usedPrompts.add(s.prompt);
+          } else {
+            if (s.element && s.element.parentElement) s.element.parentElement.removeChild(s.element);
+          }
+        });
       }
-      lastBatchElements = createdItems;
 
+      if (batch.length === 0) throw new Error('No playable stories.');
+
+      if (insert === 'prepend') {
+        storiesData = [...batch, ...storiesData];
+      } else {
+        storiesData.push(...batch);
+      }
+
+      lastBatchElements = createdItems;
     } catch (error) {
-      console.error('Failed to load new stories:', error);
-      loader.innerText = '加载失败，请刷新重试。';
+      console.error('Failed to load stories:', error);
+      if (loader) loader.innerText = '加载失败，请刷新重试。';
     } finally {
-      isLoading = false;
-      loader.classList.add('hidden');
+      setLoading(false);
     }
   }
 
-  // ===== Open fullscreen and play =====
+  // ---- 打开全屏并播放 ----
   async function openStory(id) {
     const idx = storiesData.findIndex(s => s.id == id);
     if (idx === -1) return;
     currentStoryIndex = idx;
-    modal.classList.remove('hidden');
-
-    // 🔊 进入全屏时先尝试解锁，避免首次播放被策略拦截
-    tryUnlockAudio();
-
+    modal?.classList.remove('hidden');
+    tryUnlockAudio(); // 确保进入全屏即解锁
     await playCurrentStory();
   }
 
-  // ===== Core: play story audio + subtitles (with race protection) =====
+  // ---- 播放当前故事（含并发保护）----
   async function playCurrentStory() {
-    // Validate playable story (must have imageUrl). If invalid, jump to the very first playable story.
-    if (!storiesData.length || !storiesData[currentStoryIndex] || !storiesData[currentStoryIndex].imageUrl) {
-      const firstPlayableIndex = storiesData.findIndex(x => x.imageUrl);
-      if (firstPlayableIndex >= 0) {
-        currentStoryIndex = firstPlayableIndex;
-        // no recursion loop because we checked imageUrl above
-      } else {
-        // no playable story at all -> close modal
-        closeStory();
-        return;
-      }
-    }
-
-    const s = storiesData[currentStoryIndex];
-    if (!s || !s.imageUrl) {
+    const playableIndex = findFirstPlayableIndexFrom(currentStoryIndex);
+    if (playableIndex === -1) {
       closeStory();
       return;
     }
+    currentStoryIndex = playableIndex;
 
-    // 1) stop previous audio & timers immediately
+    const s = storiesData[currentStoryIndex];
     stopCurrentAudio();
 
-    // 2) bump play token, cancel any in-flight TTS fetch
     const myToken = ++currentPlayToken;
-    if (speechAbortController) {
-      try { speechAbortController.abort(); } catch {}
-    }
+    if (speechAbortController) { try { speechAbortController.abort(); } catch {} }
     speechAbortController = new AbortController();
 
-    // 3) prepare background only (do NOT show subtitles yet)
-    storyPlayer.style.backgroundImage = `url(${s.imageUrl})`;
-    subtitleContainer.innerHTML = '';
-    subtitleContainer.style.display = 'none';
-    storyLoader.classList.remove('hidden');
+    // 背景图
+    if (storyPlayer) {
+      storyPlayer.style.backgroundImage = `url(${s.imageUrl})`;
+      storyPlayer.classList.add('animate-ken-burns');
+    }
+    if (subtitleContainer) {
+      subtitleContainer.innerHTML = '';
+      subtitleContainer.style.display = 'none';
+    }
+    storyLoader?.classList.remove('hidden');
 
     try {
-      // Only request TTS after we confirmed there is a valid image (done above)
-      const speechResponse = await fetch('/api/generate-speech', {
+      const speechResponse = await fetch('/api/generate-speech?lang=en', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: s.story }),
         signal: speechAbortController.signal
       });
 
-      // If we switched stories while waiting, ignore this response
       if (myToken !== currentPlayToken) return;
 
       const speechData = await speechResponse.json();
-      storyLoader.classList.add('hidden');
-      storyPlayer.classList.add('animate-ken-burns', 'animate-handheld');
+      storyLoader?.classList.add('hidden');
+      if (storyPlayer) storyPlayer.classList.add('animate-ken-burns');
+      if (subtitleContainer) subtitleContainer.style.display = 'block';
 
-      // Now show subtitles since audio is ready
-      subtitleContainer.style.display = 'block';
-
-      // Again guard: if token changed during JSON parse/UI update, bail out
       if (myToken !== currentPlayToken) return;
 
       playAudioWithSubtitles(speechData.audioContent, speechData.timepoints, s.story, myToken);
     } catch (error) {
-      if (error.name === 'AbortError') return; // switched story, safe to ignore
+      if (error.name === 'AbortError') return;
       console.error('Failed to generate speech:', error);
-      // If TTS fails, don't show this story either -> jump to first playable
-      const firstPlayableIndex = storiesData.findIndex(x => x.imageUrl);
-      if (firstPlayableIndex >= 0) {
-        currentStoryIndex = firstPlayableIndex;
+      // TTS失败 → 跳到第一条可播
+      const firstIdx = findFirstPlayableIndexFrom(0);
+      if (firstIdx >= 0) {
+        currentStoryIndex = firstIdx;
         playCurrentStory();
       } else {
         closeStory();
@@ -269,7 +247,18 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // ===== Split lines (unchanged) =====
+  function findFirstPlayableIndexFrom(start) {
+    if (!storiesData.length) return -1;
+    for (let i = start; i < storiesData.length; i++) {
+      if (storiesData[i] && storiesData[i].imageUrl) return i;
+    }
+    for (let i = 0; i < start; i++) {
+      if (storiesData[i] && storiesData[i].imageUrl) return i;
+    }
+    return -1;
+  }
+
+  // ---- 文本分行（原逻辑保留）----
   function splitTextIntoLines(text) {
     const lines = [];
     const maxCharsPerLine = 12;
@@ -328,12 +317,10 @@ document.addEventListener('DOMContentLoaded', () => {
     return lines.length > 0 ? lines : [{ text }];
   }
 
-  // ===== Play audio + progressive word highlight (token-aware) =====
+  // ---- 播放音频 + 字幕 ----
   function playAudioWithSubtitles(audioBase64, timepoints, fullText, token) {
-    // If a newer play started, ignore
     if (token !== currentPlayToken) return;
 
-    // Revoke previous blob URL (if any)
     if (currentAudioUrl) {
       try { URL.revokeObjectURL(currentAudioUrl); } catch {}
       currentAudioUrl = null;
@@ -343,17 +330,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const audioUrl = URL.createObjectURL(audioBlob);
     currentAudioUrl = audioUrl;
     currentAudio = new Audio(audioUrl);
-
-    // 🔊 iOS 必需：内联播放 + 不静音
     currentAudio.playsInline = true;
     currentAudio.autoplay = true;
     currentAudio.muted = false;
 
-    subtitleContainer.innerHTML = '';
+    // iOS/安卓：没有覆盖层，但我们尽可能自动解锁（如果失败，只是静默，用户再滑一次通常就能有声）
+    currentAudio.play().catch((err) => {
+      console.warn('Autoplay blocked, will rely on user gesture:', err?.message || err);
+    });
 
+    if (!subtitleContainer) return;
+    subtitleContainer.innerHTML = '';
     const lines = splitTextIntoLines(fullText);
 
-    // --- Token-aware: if a newer play starts, all timers will be ignored after stopCurrentAudio() ---
     const wordsData = [];
     let globalCharIndex = 0;
 
@@ -414,7 +403,6 @@ document.addEventListener('DOMContentLoaded', () => {
       wordsData.push(...lineWords);
     });
 
-    // --- DOM render for lines/words ---
     const maxVisibleLines = 2;
     const lineElements = [];
     const wordElements = [];
@@ -450,15 +438,7 @@ document.addEventListener('DOMContentLoaded', () => {
       wordElements.push(wordSpan);
     });
 
-    // Show subtitles once audio is ready to play
     subtitleContainer.style.display = 'block';
-
-    // 🔊 尝试播放；若被浏览器策略拦截，把当前 audio 记录为待重播
-    currentAudio.play().catch(err => {
-      console.warn('Audio play blocked until user gesture:', err);
-      pendingAudioToPlay = currentAudio;
-    });
-
     let currentLineIdx = -1;
 
     function updateVisibleLines(targetLineIndex) {
@@ -469,24 +449,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       lineElements.forEach((el, idx) => {
         if (!el) return;
-        if (idx >= startLine && idx < startLine + maxVisibleLines) {
-          el.style.display = 'block';
-          el.style.animation = 'fadeIn 0.3s ease';
-        } else {
-          el.style.display = 'none';
-        }
+        el.style.display = (idx >= startLine && idx < startLine + maxVisibleLines) ? 'block' : 'none';
       });
     }
 
     function updateWordHighlight(wordIdx) {
-      // Ignore if a newer play started
       if (token !== currentPlayToken) return;
-
       wordElements.forEach(el => { if (el) el.classList.remove('highlight', 'current-word'); });
       if (wordElements[wordIdx]) {
         const currentWordEl = wordElements[wordIdx];
         currentWordEl.classList.add('highlight', 'current-word');
-
         const lineIdx = parseInt(currentWordEl.dataset.lineIndex, 10);
         if (lineIdx !== currentLineIdx) {
           lineElements.forEach(el => { if (el) el.classList.remove('active'); });
@@ -500,16 +472,140 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // Schedule highlights (token-aware via stopCurrentAudio clearing timeouts)
+    // 计时方案
     if (timepoints && timepoints.length > 0) {
       const timePerWord = currentAudio.duration
         ? (currentAudio.duration * 1000) / wordsData.length
         : 15000 / wordsData.length;
       wordsData.forEach((_, idx) => {
-        const timeInMs = idx * timePerWord;
-        const timeoutId = setTimeout(() => updateWordHighlight(idx), timeInMs);
+        const timeoutId = setTimeout(() => updateWordHighlight(idx), idx * timePerWord);
         subtitleTimeouts.push(timeoutId);
       });
     } else {
       currentAudio.addEventListener('loadedmetadata', () => {
-        if (token !== currentPlayToken) return; // in case we switched before metadata
+        if (token !== currentPlayToken) return;
+        const duration = currentAudio.duration * 1000;
+        const timePerWord = duration / wordsData.length;
+        wordsData.forEach((_, idx) => {
+          const timeoutId = setTimeout(() => updateWordHighlight(idx), idx * timePerWord);
+          subtitleTimeouts.push(timeoutId);
+        });
+      });
+    }
+
+    currentAudio.onended = () => {
+      if (token !== currentPlayToken) return;
+      storyPlayer?.classList.remove('animate-ken-burns');
+      wordElements.forEach(el => { if (el) el.classList.remove('highlight', 'current-word', 'sung'); });
+      lineElements.forEach(el => { if (el) el.classList.remove('active'); });
+      if (subtitleContainer) subtitleContainer.style.display = 'none';
+      subtitleTimeouts = [];
+    };
+  }
+
+  // ---- 停止当前音频 ----
+  function stopCurrentAudio() {
+    if (speechAbortController) {
+      try { speechAbortController.abort(); } catch {}
+      speechAbortController = null;
+    }
+    if (currentAudio) {
+      try {
+        currentAudio.pause();
+        currentAudio.onended = null;
+        currentAudio.src = '';
+        currentAudio.load?.();
+      } catch {}
+      currentAudio = null;
+    }
+    if (currentAudioUrl) {
+      try { URL.revokeObjectURL(currentAudioUrl); } catch {}
+      currentAudioUrl = null;
+    }
+    if (subtitleTimeouts.length > 0) {
+      subtitleTimeouts.forEach(id => clearTimeout(id));
+      subtitleTimeouts = [];
+    }
+    if (subtitleContainer) {
+      const allWords = subtitleContainer.querySelectorAll('.subtitle-word');
+      allWords.forEach(el => el.classList.remove('highlight', 'sung'));
+      const allLines = subtitleContainer.querySelectorAll('.subtitle-line');
+      allLines.forEach(el => el.classList.remove('active'));
+      subtitleContainer.style.display = 'none';
+    }
+  }
+
+  // ---- 关闭全屏 ----
+  function closeStory() {
+    modal?.classList.add('hidden');
+    storyPlayer?.classList.remove('animate-ken-burns');
+    stopCurrentAudio();
+
+    // 回首页置顶最新批次
+    if (lastBatchElements && lastBatchElements.length > 0) {
+      for (let i = lastBatchElements.length - 1; i >= 0; i--) {
+        const el = lastBatchElements[i];
+        if (el && el.parentElement === gallery) gallery.prepend(el);
+      }
+    }
+  }
+  closeModalBtn?.addEventListener('click', closeStory);
+
+  // ---- 全屏手势/滚轮 ----
+  let touchStartY = 0;
+  modal?.addEventListener('touchstart', (e) => {
+    tryUnlockAudio(); // 任意触摸也解锁
+    touchStartY = e.changedTouches[0].screenY;
+  }, { passive: true });
+
+  modal?.addEventListener('touchend', (e) => {
+    const dy = touchStartY - e.changedTouches[0].screenY;
+    if (Math.abs(dy) > 50) (dy > 0 ? nextStory() : previousStory());
+  }, { passive: true });
+
+  const wheelHandler = (e) => {
+    if (modal?.classList.contains('hidden')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (navLock) return;
+    navLock = true;
+    setTimeout(() => (navLock = false), NAV_THROTTLE_MS);
+    (e.deltaY > 0) ? nextStory() : previousStory();
+  };
+  modal?.addEventListener('wheel', wheelHandler, { passive: false });
+  window.addEventListener('wheel', wheelHandler, { passive: false });
+
+  // ---- 切换故事 & 预加载 ----
+  async function nextStory() {
+    const atBatchTail = (currentStoryIndex % 4 === 3);
+    if (atBatchTail && !isLoading) {
+      await loadNewStories({ insert: 'append', forceRefresh: true });
+    }
+    if (currentStoryIndex < storiesData.length - 1) {
+      currentStoryIndex++;
+      tryUnlockAudio();
+      await playCurrentStory();
+    }
+  }
+  function previousStory() {
+    if (currentStoryIndex > 0) {
+      currentStoryIndex--;
+      tryUnlockAudio();
+      playCurrentStory();
+    }
+  }
+
+  // 键盘（桌面）
+  document.addEventListener('keydown', (e) => {
+    if (modal?.classList.contains('hidden')) return;
+    switch (e.key) {
+      case 'Escape': return closeStory();
+      case 'ArrowDown':
+      case 'ArrowRight':
+        e.preventDefault(); return nextStory();
+      case 'ArrowUp':
+      case 'ArrowLeft':
+        e.preventDefault(); return previousStory();
+    }
+  });
+});
