@@ -482,6 +482,12 @@ app.get('/api/cache-stats', (req, res) => {
     }
 });
 
+// 根路由返回前端页面
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+
 app.listen(port, () => {
     console.log(`
     ========================================
